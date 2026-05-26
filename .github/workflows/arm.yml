@@ -62,23 +62,17 @@ jobs:
         run: |
           $token = "${{ secrets.PINGGY_TOKEN }}"
           $user  = if ($token) { "$token+tcp" } else { "tcp" }
- 
-          # -tt forces PTY allocation regardless of local stdin state,
-          # so we don't need to redirect stdin at all.
-          Start-Process -FilePath "ssh" -NoNewWindow `
-            -ArgumentList @(
-              "-tt",
-              "-o","StrictHostKeyChecking=no",
-              "-o","UserKnownHostsFile=NUL",
-              "-o","ServerAliveInterval=30",
-              "-o","ExitOnForwardFailure=yes",
-              "-p","443",
-              "-R","0:localhost:22",
-              "$user@a.pinggy.io"
-            ) `
-            -RedirectStandardOutput pinggy.out `
-            -RedirectStandardError  pinggy.err
- 
+
+          # Use cmd.exe redirection so ssh's stdout flushes line-by-line and
+          # stdin is detached from NUL (Start-Process leaves stdio in a state
+          # where ssh never finalizes the session, so Pinggy never sends its banner).
+          $cmd = "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL " +
+                 "-o ServerAliveInterval=30 -o ExitOnForwardFailure=yes " +
+                 "-p 443 -R 0:localhost:22 $user@a.pinggy.io " +
+                 "< NUL > pinggy.out 2> pinggy.err"
+
+          Start-Process -FilePath "cmd.exe" -ArgumentList "/c", $cmd -NoNewWindow
+
           # Poll for the URL (Pinggy banner can take 20-30s)
           $url = $null
           for ($i = 0; $i -lt 30; $i++) {
