@@ -57,52 +57,24 @@ jobs:
           Get-Service sshd
 
       
-      - name: Start Pinggy TCP tunnel for SSH
+      - name: Start Pinggy TCP tunnel and hold runner open
         shell: powershell
+        timeout-minutes: 345
         run: |
           $token = "${{ secrets.PINGGY_TOKEN }}"
           $user  = if ($token) { "$token+tcp" } else { "tcp" }
 
-          # Use cmd.exe redirection so ssh's stdout flushes line-by-line and
-          # stdin is detached from NUL (Start-Process leaves stdio in a state
-          # where ssh never finalizes the session, so Pinggy never sends its banner).
+          # Run ssh in the foreground so the tunnel's lifetime is tied to
+          # this step (and therefore the runner). cmd.exe redirection gives
+          # us a clean detached stdin (< NUL) and unbuffered file output.
+          # All tunnel output is discarded to keep the public Pinggy URL
+          # out of the Actions log.
           $cmd = "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL " +
-                 "-o ServerAliveInterval=30 -o ExitOnForwardFailure=yes " +
+                 "-o ServerAliveInterval=30 -o ServerAliveCountMax=120 " +
+                 "-o ExitOnForwardFailure=yes " +
                  "-p 443 -R 0:localhost:22 $user@a.pinggy.io " +
-                 "< NUL > pinggy.out 2> pinggy.err"
+                 "< NUL > NUL 2>&1"
 
-          Start-Process -FilePath "cmd.exe" -ArgumentList "/c", $cmd -NoNewWindow
-
-          # Poll for the URL (Pinggy banner can take 20-30s)
-          $url = $null
-          for ($i = 0; $i -lt 30; $i++) {
-            Start-Sleep -Seconds 2
-            $content = Get-Content pinggy.out -Raw -ErrorAction SilentlyContinue
-            if ($content -match 'tcp://([^\s]+\.pinggy\.[a-z]+:\d+)') {
-              $url = $matches[1]
-              break
-            }
-          }
- 
-          Write-Host "==================== PINGGY URL ===================="
-          if ($url) {
-            $parts = $url.Split(':')
-            Write-Host "Public address : $url"
-            Write-Host ""
-            Write-Host "Connect from your laptop:"
-            Write-Host "  ssh runneradmin@$($parts[0]) -p $($parts[1])"
-            Write-Host ""
-            Write-Host "Password: the SSH_PASSWORD secret you set."
-          } else {
-            Write-Host "No URL detected after 60s. Raw output below:"
-            Write-Host "--- stdout ---"
-            Get-Content pinggy.out -ErrorAction SilentlyContinue
-            Write-Host "--- stderr ---"
-            Get-Content pinggy.err -ErrorAction SilentlyContinue
-          }
-          Write-Host "===================================================="
- 
-
-      - name: Hold the runner open
-        shell: powershell
-        run: Start-Sleep -Seconds 20700   # ~5 h 45 m
+          Write-Host "Starting Pinggy tunnel (URL hidden). Runner will stay up until the tunnel exits or the job times out."
+          cmd.exe /c $cmd
+          Write-Host "Tunnel exited."
