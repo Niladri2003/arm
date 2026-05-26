@@ -20,7 +20,7 @@ jobs:
         run: |
           $svc = Get-Service sshd -ErrorAction SilentlyContinue
           if (-not $svc) {
-            $url = "https://github.com/PowerShell/Win32-OpenSSH/releases/download/v10.0.0.0/OpenSSH-ARM64.zip"
+            $url = "https://github.com/PowerShell/Win32-OpenSSH/releases/download/v9.8.3.0p2-Preview/OpenSSH-ARM64.zip"
             $zip = "$env:TEMP\OpenSSH-ARM64.zip"
 
             Write-Host "Downloading OpenSSH ARM64 (~5 MB)..."
