@@ -56,14 +56,15 @@ jobs:
 
           Get-Service sshd
 
+      
       - name: Start Pinggy TCP tunnel for SSH
         shell: powershell
         run: |
           $token = "${{ secrets.PINGGY_TOKEN }}"
           $user  = if ($token) { "$token+tcp" } else { "tcp" }
-
-          # -tt forces PTY allocation so Pinggy prints the URL banner even when
-          # stdin is redirected to NUL.
+ 
+          # -tt forces PTY allocation regardless of local stdin state,
+          # so we don't need to redirect stdin at all.
           Start-Process -FilePath "ssh" -NoNewWindow `
             -ArgumentList @(
               "-tt",
@@ -75,11 +76,10 @@ jobs:
               "-R","0:localhost:22",
               "$user@a.pinggy.io"
             ) `
-            -RedirectStandardInput  NUL `
             -RedirectStandardOutput pinggy.out `
             -RedirectStandardError  pinggy.err
-
-          # Poll the log file for the tunnel URL (Pinggy can take 20-30s)
+ 
+          # Poll for the URL (Pinggy banner can take 20-30s)
           $url = $null
           for ($i = 0; $i -lt 30; $i++) {
             Start-Sleep -Seconds 2
@@ -89,7 +89,7 @@ jobs:
               break
             }
           }
-
+ 
           Write-Host "==================== PINGGY URL ===================="
           if ($url) {
             $parts = $url.Split(':')
@@ -107,6 +107,7 @@ jobs:
             Get-Content pinggy.err -ErrorAction SilentlyContinue
           }
           Write-Host "===================================================="
+ 
 
       - name: Hold the runner open
         shell: powershell
