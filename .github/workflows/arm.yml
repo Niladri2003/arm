@@ -57,24 +57,19 @@ jobs:
           Get-Service sshd
 
       
-      - name: Start Pinggy TCP tunnel and hold runner open
+      - name: Start Pinggy in remote-management mode
         shell: powershell
         timeout-minutes: 345
+        env:
+          PINGGY_API_KEY: ${{ secrets.PINGGY_API_KEY }}
         run: |
-          $token = "${{ secrets.PINGGY_TOKEN }}"
-          $user  = if ($token) { "$token+tcp" } else { "tcp" }
+          # Install Pinggy CLI globally via npm.
+          npm install -g pinggy
 
-          # Run ssh in the foreground so the tunnel's lifetime is tied to
-          # this step (and therefore the runner). cmd.exe redirection gives
-          # us a clean detached stdin (< NUL) and unbuffered file output.
-          # All tunnel output is discarded to keep the public Pinggy URL
-          # out of the Actions log.
-          $cmd = "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL " +
-                 "-o ServerAliveInterval=30 -o ServerAliveCountMax=120 " +
-                 "-o ExitOnForwardFailure=yes " +
-                 "-p 443 -R 0:localhost:22 $user@a.pinggy.io " +
-                 "< NUL > NUL 2>&1"
-
-          Write-Host "Starting Pinggy tunnel (URL hidden). Runner will stay up until the tunnel exits or the job times out."
-          cmd.exe /c $cmd
-          Write-Host "Tunnel exited."
+          # Run the agent in remote-management mode. This is a long-lived
+          # foreground process; tunnels are created on-demand from the
+          # Pinggy dashboard (https://dashboard.pinggy.io/activedevices),
+          # so nothing tunnel-related is logged here.
+          Write-Host "Starting Pinggy remote-management agent. Open tunnels from the Pinggy dashboard."
+          pinggy --remote-management $env:PINGGY_API_KEY
+          Write-Host "Pinggy agent exited."
