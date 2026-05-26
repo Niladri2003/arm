@@ -1,10 +1,9 @@
 name: Debug Windows ARM64 via Pinggy
 
 on:
-   push:
-      branches: [main]
-   workflow_dispatch:
-  
+  push:
+    branches: [main]
+  workflow_dispatch:
 
 jobs:
   debug:
@@ -16,54 +15,76 @@ jobs:
         shell: powershell
         run: net user runneradmin "${{ secrets.SSH_PASSWORD }}"
 
-      - name: Enable OpenSSH Server
+      - name: Install OpenSSH Server (fast — direct download)
         shell: powershell
         run: |
           $svc = Get-Service sshd -ErrorAction SilentlyContinue
           if (-not $svc) {
-            Write-Host "sshd not present, installing Windows capability..."
-            Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
+            $url = "https://github.com/PowerShell/Win32-OpenSSH/releases/download/v10.0.0.0/OpenSSH-ARM64.zip"
+            $zip = "$env:TEMP\OpenSSH-ARM64.zip"
+
+            Write-Host "Downloading OpenSSH ARM64 (~5 MB)..."
+            $ProgressPreference = 'SilentlyContinue'   # huge speedup for Invoke-WebRequest
+            Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
+
+            Write-Host "Extracting..."
+            Expand-Archive -Path $zip -DestinationPath "C:\Program Files" -Force
+            Rename-Item "C:\Program Files\OpenSSH-ARM64" "C:\Program Files\OpenSSH" -ErrorAction SilentlyContinue
+
+            Write-Host "Registering sshd service..."
+            powershell.exe -ExecutionPolicy Bypass -File "C:\Program Files\OpenSSH\install-sshd.ps1"
+
+            Remove-Item $zip -Force
           } else {
-            Write-Host "sshd already present: $($svc.StartType) / $($svc.Status)"
+            Write-Host "sshd already present, skipping install."
           }
 
           Set-Service -Name sshd -StartupType Automatic
           Start-Service sshd
 
-          (Get-Content "C:\ProgramData\ssh\sshd_config") `
+          # Enable password auth
+          $cfg = "C:\ProgramData\ssh\sshd_config"
+          (Get-Content $cfg) `
             -replace '#?PasswordAuthentication.*','PasswordAuthentication yes' |
-            Set-Content "C:\ProgramData\ssh\sshd_config"
+            Set-Content $cfg
           Restart-Service sshd
 
+          # Allow inbound on port 22
           New-NetFirewallRule -Name sshd -DisplayName 'OpenSSH-Server-In-TCP' `
             -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22 `
             -ErrorAction SilentlyContinue | Out-Null
 
           Get-Service sshd
 
-      - name: Install Pinggy CLI
-        shell: powershell
-        run: |
-          npm install -g pinggy
-          pinggy --version
-
       - name: Start Pinggy TCP tunnel for SSH
         shell: powershell
         run: |
           $token = "${{ secrets.PINGGY_TOKEN }}"
-          $user  = if ($token) { "$token+tcp@a.pinggy.io" } else { "tcp@a.pinggy.io" }
+          $user  = if ($token) { "$token+tcp" } else { "tcp" }
 
-          Start-Process -FilePath "pinggy" -NoNewWindow `
-            -ArgumentList @("-R0:localhost:22", $user) `
+          # -tt forces PTY allocation so Pinggy prints the URL banner even when
+          # stdin is redirected to NUL.
+          Start-Process -FilePath "ssh" -NoNewWindow `
+            -ArgumentList @(
+              "-tt",
+              "-o","StrictHostKeyChecking=no",
+              "-o","UserKnownHostsFile=NUL",
+              "-o","ServerAliveInterval=30",
+              "-o","ExitOnForwardFailure=yes",
+              "-p","443",
+              "-R","0:localhost:22",
+              "$user@a.pinggy.io"
+            ) `
+            -RedirectStandardInput  NUL `
             -RedirectStandardOutput pinggy.out `
             -RedirectStandardError  pinggy.err
 
-          # Wait up to ~60 s for the URL to appear in the CLI stdout
+          # Poll the log file for the tunnel URL (Pinggy can take 20-30s)
           $url = $null
           for ($i = 0; $i -lt 30; $i++) {
             Start-Sleep -Seconds 2
             $content = Get-Content pinggy.out -Raw -ErrorAction SilentlyContinue
-            if ($content -match 'tcp://([^\s]+)') {
+            if ($content -match 'tcp://([^\s]+\.pinggy\.[a-z]+:\d+)') {
               $url = $matches[1]
               break
             }
@@ -79,7 +100,8 @@ jobs:
             Write-Host ""
             Write-Host "Password: the SSH_PASSWORD secret you set."
           } else {
-            Write-Host "No URL detected. Raw output:"
+            Write-Host "No URL detected after 60s. Raw output below:"
+            Write-Host "--- stdout ---"
             Get-Content pinggy.out -ErrorAction SilentlyContinue
             Write-Host "--- stderr ---"
             Get-Content pinggy.err -ErrorAction SilentlyContinue
